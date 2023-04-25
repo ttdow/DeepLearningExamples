@@ -272,7 +272,7 @@ class NerfModel(nn.Module):
         return c, sigma
 
 @torch.no_grad()
-def test(nerf_model, hn, hf, dataset, chunk_size=10, img_index=0, nb_bins=192, H=400, W=400, device='cpu'):
+def test(nerf_model, hn, hf, dataset, chunk_size=10, img_index=0, nb_bins=192, H=400, W=400, device='cuda'):
     ray_origins = dataset[img_index * H * W: (img_index + 1) * H * W, :3]
     ray_directions = dataset[img_index * H * W: (img_index + 1) * H * W, 3:6]
 
@@ -291,30 +291,30 @@ def test(nerf_model, hn, hf, dataset, chunk_size=10, img_index=0, nb_bins=192, H
     plt.savefig(f'novel_views/img_{img_index}.png', bbox_inches='tight')
     plt.close()
 
-def train(nerf_model, optimizer, scheduler, data_loader, device='cpu', hn=0, hf=1, nb_epochs=int(1e5), nb_bins=192, H=400, W=400):
+def train(nerf_model, optimizer, scheduler, data_loader, device='cuda', hn=0, hf=1, nb_epochs=int(1e5), nb_bins=192, H=400, W=400):
 
     training_loss = []
+
+    counter = 0
     
     for _ in tqdm(range(nb_epochs)):
         for batch in data_loader:
 
-            print("here")
+            print("Epoch: " + str(counter) + " / " + str(15625))
 
             ray_origins = batch[:, :3].to(device)
             ray_directions = batch[:, 3:6].to(device)
             ground_truth_px_values = batch[:, 6:].to(device)
 
-            print("there")
-
             regenerated_px_values = render_rays(nerf_model, ray_origins, ray_directions, hn=hn, hf=hf, nb_bins=nb_bins)
             loss = ((ground_truth_px_values - regenerated_px_values) ** 2).sum()
-
-            print("where")
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             training_loss.append(loss.item())
+
+            counter += 1
         
         scheduler.step()
 
@@ -323,7 +323,7 @@ def train(nerf_model, optimizer, scheduler, data_loader, device='cpu', hn=0, hf=
 
     return training_loss
 
-device = 'cpu'
+device = 'cuda'
 
 training_dataset = torch.from_numpy(np.load('./data/training_data.pkl', allow_pickle=True))
 testing_dataset = torch.from_numpy(np.load('./data/testing_data.pkl', allow_pickle=True))
