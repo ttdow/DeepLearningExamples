@@ -14,4 +14,5 @@
     <li>https://dreamfusion3d.github.io/</li>
     <li>https://github.com/lucidrains/imagen-pytorch</li>
     <li>https://www.assemblyai.com/blog/minimagen-build-your-own-imagen-text-to-image-model/</li>
+    <li>https://ubc-vision.github.io/lolnerf/</li>
 </ul>
