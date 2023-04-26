@@ -383,6 +383,9 @@ ddpm = DDPM(UNet(n_steps))
 # Loading the pre-trained model
 store_path = "ddpm_model.pt"
 ddpm.load_state_dict(torch.load(store_path, map_location=device))
+
+
+'''
 training_loop(ddpm=ddpm, 
               loader=data_loader, 
               n_epochs=n_epochs, 
@@ -390,3 +393,4 @@ training_loop(ddpm=ddpm,
               device=device, 
               display=True, 
               store_path=store_path)
+'''
