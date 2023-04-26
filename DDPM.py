@@ -183,15 +183,15 @@ def show_images(images, title=""):
     # Display the figure
     plt.show()
 
-def generate_new_images(ddpm, n_samples=16, device=None, frames_per_gif=100, gif_name="sampling.gif", c=1, h=28, w=28):
+def generate_new_images(ddpm, n_samples=16, device=torch.device("cpu"), frames_per_gif=100, gif_name="sampling.gif", c=1, h=28, w=28):
 
     # Given a DDPM model, a number of samples to be generated and a device, return some newly generated samples.
     frame_idxs = np.linspace(0, ddpm.n_steps, frames_per_gif).astype(np.uint)
     frames = []
 
     with torch.no_grad():
-        if device is None:
-            device = ddpm.device
+        #if device is None:
+        device = ddpm.device
 
         # Starting from random noise
         x = torch.randn(n_samples, c, h, w).to(device)
@@ -347,7 +347,7 @@ FASHION_PATH = f"ddpm_model_fashion.pt"
 
 # Hyperparameters
 batch_size = 128
-n_epochs = 1
+n_epochs = 3
 lr = 0.001
 
 # Transforms for images in dataset (convert to tensor and normalize)
