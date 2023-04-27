@@ -72,8 +72,6 @@ transform = ToPILImage()
 img = transform(test_output[0])
 img.show()
 
-
-
 counter = 0
 for epoch in range(100):
     for target_images, text_embeddings in dataloader:
