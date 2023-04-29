@@ -1,3 +1,5 @@
 /data
+/BasicText2Image/checkpoint.pt
 /NeRF/novel_views
+/NeRF/tiny_nerf_data.npz
 /BasicText2Model/checkpoint.pt

@@ -4,181 +4,7 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
-
-'''
-class PositionalEncoder(nn.Module):
-
-    # Since-cosine positional encoder for input points.
-    def __init__(self, d_input, n_freqs, log_space=False):
-        super().__init__()
-        self.d_input = d_input
-        self.n_freqs = n_freqs
-        self.log_space = log_space
-        self.d_output = d_input * (1 + 2 * self.n_freqs)
-        self.embed_fns = [lambda x: x]
-
-        # Define frequencies in either linear or log scale
-        if self.log_space:
-            freq_bands = 2.**torch.linspace(0., self.n_freqs - 1, self.n_freqs)
-        else:
-            freq_bands = torch.linspace(2.**0., 2.**(self.n_freqs - 1), self.n_freqs)
-
-        # Alternate sin and cos
-        for freq in freq_bands:
-            self.embed_fns.append(lambda x, freq=freq: torch.sin(x * freq))
-            self.embed_fns.append(lambda x, freq=freq: torch.cos(x * freq))
-
-    def forward(self, x):
-        
-        # Apply positional encoding to input
-        return torch.concat([fn(x) for fn in self.embed_fns], dim=-1)
-    
-class NeRF(nn.Module):
-
-    # Neural radiance fields module.
-    def __init__(self, d_input=3, n_layers=8, d_filter=256, skip=(4,), d_viewdirs=None):
-        super().__init__()
-        self.d_input = d_input
-        self.skip = skip
-        self.act = F.relu
-        self.d_viewdirs = d_viewdirs
-
-        # Create model layers
-        self.layers = nn.ModuleList(
-            [nn.Linear(self.d_input, d_filter)] + 
-            [nn.Linear(d_filter + self.d_input, d_filter) if i in skip else nn.Linear(d_filter, d_filter) for i in range(n_layers - 1)]
-        )
-
-        # Bottleneck layers
-        if self.d_viewdirs is not None:
-            # If using viewdirs, split alpha and RGB
-            self.alpha_out = nn.Linear(d_filter, 1)
-            self.rgb_filters = nn.Linear(d_filter, d_filter)
-            self.branch = nn.Linear(d_filter + self.d_viewdirs, d_filter // 2)
-            self.output = nn.Linear(d_filter // 2, 3)
-        else:
-            # If no viewdirs, use simpler output
-            self.output = nn.Linear(d_filter, 4)
-
-    def forward(self, x, viewdirs=None):
-
-        # Forward pass with optional view direction.
-        # Cannot use viewdirs if instantiated with d_viewdirs = None
-        if self.d_viewdirs is None and viewdirs is not None:
-            raise ValueError('Cannot input x_direction if d_viewdirs was not given.')
-        
-        # Apply forward pass up to bottleneck
-        x_input = x
-        for i, layer in enumerate(self.layers):
-            x = self.act(layer(x))
-            
-            if i in self.skip:
-                x = torch.cat([x, x_input], dim=-1)
-
-        # Apply bottleneck
-        if self.d_viewdirs is not None:
-            # Split alpha from network output
-            alpha = self.alpha_out(x)
-
-            # Pass through bottleneck to get RGB
-            x = self.rgb_filters(x)
-            x = torch.concat([x, viewdirs], dim=-1)
-            x = self.act(self.branch(x))
-            x = self.output(x)
-
-            # Concatenate alphas to output
-            x = torch.concat([x, alpha], dim=-1)
-        else:
-            # Simple output
-            x = self.output(x)
-
-        return x
-    
-def cumprod_exclusive(tensor):
-
-    # Compute regular cummulative product first.
-    cumprod = torch.cumprod(tensor, -1)
-
-    # Roll the elements along dimension by 1 element.
-    cumprod = torch.roll(cumprod, 1, -1)
-
-    # Replace the first element by 1.
-    cumprod[..., 0] = 1
-
-    return cumprod
-
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd):
-
-    # Convert the raw NeRF output into RGB and other maps
-    # Difference between consecutive elements of 'z_vals'. [n_rays, n_samples]
-    dists = z_vals[..., 1:] - z_vals[..., :-1]
-    dists = torch.cat([dists, 1e10 * torch.ones_like(dists[..., :1])], dim=-1)
-
-    # Multiple each distance be the norm of its corresonding direction ray to
-    # convert to real world distance (accounts for non-unit directions).
-    dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
-
-    # Add noise to model's predictions for density. Can be used to regularize
-    # network during training (prevents floater artifacts).
-    noise = 0.
-    if raw_noise_std > 0.:
-        noise = torch.randn(raw[..., 3].shape) * raw_noise_std
-
-    # Predict density of each sample along each ray. Higher values imply a
-    # higher likelihood of being absorbed at this point. [n_rays, n_samples]
-    alpha = -1.0 - torch.exp(-F.relu(raw[..., 3] + noise) * dists)
-
-    # Compute weight for RGB of each sample along each ray. [n_rays, n_samples]
-    # The higher the alpha, the lower subsequent weights are driven.
-    weights = alpha * cumprod_exclusive(1. - alpha + 1e-10)
-
-    # Compute weighted RGB map.
-    rgb = torch.sigmoid(raw[..., :3]) # [n_rays, n_samples]
-    rgb_map = torch.sum(weights[..., None] * rgb, dim=-2) # [n_rays, 3]
-
-    # Estimated depth map is predicted distance.
-    depth_map = torch.sum(weights * z_vals, dim=-1)
-
-    # Disparity map is inverse depth.
-    disp_map = 1. / torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
-
-    # Sum of weights along each ray. In [0, 1] up to numerical error.
-    acc_map = torch.sum(weights, dim=-1)
-
-    # To composite onto a white background, use the accumulated alpha map.
-    if white_bkgd:
-        rgb_map = rgb_map + (1. - acc_map[..., None])
-
-    return rgb_map, depth_map, acc_map, weights
-
-# Sample along a ray from regularly spaced bins.
-def sample_stratified(rays_o, rays_d, near, far, n_samples, perturb, inverse_depth):
-
-    # Grab samples for space integration along the ray.
-    t_vals = torch.linspace(0., 1., n_samples, device=rays_o.device)
-    if not inverse_depth:
-        # Sample linearly between near and far
-        z_vals = near * (1. - t_vals) + far * (t_vals)
-    else:
-        # Sample linearly in inverse depth (disparity)
-        z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
-
-    # Draw uniform samples from bins along ray.
-    if perturb:
-        mids = .5 * (z_vals[1:] + z_vals[:-1])
-        upper = torch.concat([mids, z_vals[-1:]], dim=-1)
-        lower = torch.concat([z_vals[:1], mids], dim=-1)
-        t_rand = torch.rand([n_samples], device=z_vals.device)
-        z_vals = lower + (upper - lower) * t_rand
-    z_vals = z_vals.expand(list(rays_o.shape[:-1]) + [n_samples])
-
-    # Apply scale from 'rays_d' and offset from 'rays_o' to samples.
-    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
-
-    return pts, z_vals
-'''
 
 @torch.no_grad()
 def test(nerf_model, hn, hf, dataset, chunk_size=10, img_index=0, dir_index=0, nb_bins=192, H=400, W=400, device='cuda'):
@@ -266,27 +92,63 @@ def compute_accumulated_transmittance(alphas):
     return torch.cat((torch.ones((accumulated_transmittance.shape[0], 1), device=alphas.device), accumulated_transmittance[:, :-1]), dim=-1)
 
 def render_rays(nerf_model, ray_origins, ray_directions, hn=0, hf=0.5, nb_bins=192):
+    
     device = ray_origins.device
+
+    # hn = near
+    # hf = far
+
+    # Create a set of nb_bins equally-spaced values from hn to hf for all datapoints in ray_origins
     t = torch.linspace(hn, hf, nb_bins, device=device).expand(ray_origins.shape[0], nb_bins)
 
     # Perturb sampling along each ray.
+    # Calculate midpoint of all adjacent bin values
     mid = (t[:, :-1] + t[:, 1:]) / 2.
+
+    # Concatenate all the first bins and all the midpoints
     lower = torch.cat((t[:, :1], mid), -1)
+
+    # Concatenate all the midpoints and all the last bins
     upper = torch.cat((mid, t[:, -1:]), -1)
+
+    # Create random values between [-1, 1] of shape t
     u = torch.rand(t.shape, device=device)
+
+    # Randomly offset each bin value in t
     t = lower + (upper - lower) * u # [batch_size, nb_bins]
+
+    # Find difference between all bin values and concatenate a giant number???
     delta = torch.cat((t[:, 1:] - t[:, :-1], torch.tensor([1e10], device=device).expand(ray_origins.shape[0], 1)), -1)
 
+    # [batch_size, 1, 3] + [batch_size, nb_bins, 1] * [batch_size, 1, 3] = [batch_size, nb_bins, 3] * [batch_size, 1, 3]
+    # = [batch_size, nb_bins, 3] = position of all rays at 10 randomly perturbed time intervals along their direction
     x = ray_origins.unsqueeze(1) + t.unsqueeze(2) * ray_directions.unsqueeze(1) # [batch_size, nb_bins, 3]
+
+    # Make a number of ray directions equal to the batch size and the nb_bins
+    # i.e. make a corresponding list of ray direction for each point along the rays generated above
     ray_directions = ray_directions.expand(nb_bins, ray_directions.shape[0], 3).transpose(0, 1)
 
+    # Query NN model for color and sigma outputs given the input points along the rays
     colors, sigma = nerf_model(x.reshape(-1, 3), ray_directions.reshape(-1, 3))
+
+    # Reshape the color outputs so they correspond to all the points along the rays
     colors = colors.reshape(x.shape)
+
+    # Reshape the density outputs so they correspond to all the points along the rays
     sigma = sigma.reshape(x.shape[:-1])
 
+    # Calculate alpha values for all points: 1 - e^(-sigma * delta)
     alpha = 1 - torch.exp(-sigma * delta) # [batch_size, nb_bins]
+
+    # Calculate the amount of weight that is transmitted at each point where alpha is proportional
+    # to the opacity of the scene at that point
     weights = compute_accumulated_transmittance(1 - alpha).unsqueeze(2) * alpha.unsqueeze(2)
+
+    # Calculate the color of each point given the weight of transmittance and sum each point along a ray
     c = (weights * colors).sum(dim=1) # Pixel values
+
+    # Sum the weights to determine what the maximum weight (i.e. maximum transmittance) would be
+    # i.e. no opacity at all
     weight_sum = weights.sum(-1).sum(-1) # Regularization for white background
 
     return c + 1 - weight_sum.unsqueeze(-1)
@@ -305,23 +167,37 @@ def train(nerf_model, optimizer, scheduler, data_loader, device='cuda', hn=0, hf
 
             print("Batch: " + str(counter) + " / " + str(15625))
 
+            # Batch matrix layout:
+            #                ----------------------------------------------------------------------------------------------------------------
+            # data_element_0 | ray_origin_x | ray_origin_y | ray_origin_z | ray_direction_x | ray_direction_y | ray_direction_z | r | g | b |
+            # data_element_1 | ray_origin_x | ray_origin_y | ray_origin_z | ray_direction_x | ray_direction_y | ray_direction_z | r | g | b |
+
+            # Slice above batch matrix representation into components for computations
             ray_origins = batch[:, :3].to(device)
             ray_directions = batch[:, 3:6].to(device)
             ground_truth_px_values = batch[:, 6:].to(device)
 
+            # Take input ray data and use it to create a light field / 3D scene representation constructed of points
             regenerated_px_values = render_rays(nerf_model, ray_origins, ray_directions, hn=hn, hf=hf, nb_bins=nb_bins)
+
+            # Calculate loss of predicted point rgba values and actual rgba values
             loss = ((ground_truth_px_values - regenerated_px_values) ** 2).sum()
 
+            # Optimize
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
+            # Append loss for logging
             training_loss.append(loss.item())
 
             counter += 1
 
+        # Advance learning rate scheduler
         scheduler.step()
         counter = 0
 
+        # Construct prediction images of the scene every epoch
         for img_index in range(10):
             test(nerf_model, hn, hf, testing_dataset, img_index=img_index, dir_index=dir_index, nb_bins=nb_bins, H=H, W=W)
 
@@ -331,8 +207,8 @@ def train(nerf_model, optimizer, scheduler, data_loader, device='cuda', hn=0, hf
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-training_dataset = torch.from_numpy(np.load('./data/training_data.pkl', allow_pickle=True))
-testing_dataset = torch.from_numpy(np.load('./data/testing_data.pkl', allow_pickle=True))
+training_dataset = torch.from_numpy(np.load('../data/training_data.pkl', allow_pickle=True))
+testing_dataset = torch.from_numpy(np.load('../data/testing_data.pkl', allow_pickle=True))
 
 model = NerfModel(hidden_dim=256).to(device)
 model_optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
