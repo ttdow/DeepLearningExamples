@@ -1,6 +1,7 @@
 import os
 from typing import Optional, Tuple, List, Union, Callable
 import numpy as np
+from mpl_toolkits import mplot3d
 import matplotlib.pyplot as plt
 from tqdm import trange
 
@@ -65,7 +66,7 @@ class NeRF(nn.Module):
             self.output = nn.Linear(d_filter, 4)
 
     # Forward pass with optional view direction.
-    def forward(self, x: torch.Tensor, viewdirs: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, viewdirs: Optional[torch.Tensor] = None, show: bool = False) -> torch.Tensor:
 
         # Cannot use view directions if instantiated with d_viewdirs = None
         if self.d_viewdirs is None and viewdirs is not None:
@@ -97,6 +98,13 @@ class NeRF(nn.Module):
         else:
             x = self.output(x)
 
+        if show:
+            temp = x.reshape(4, -1).detach().numpy()
+            fig = plt.figure(figsize=(100,100))
+            ax = plt.axes(projection="3d")
+            ax.scatter3D(temp[0], temp[1], temp[2], color='green')
+            plt.show()
+
         return x
     
 # --------------------------- VOLUME RENDERING --------------------------------
@@ -121,6 +129,10 @@ def raw2outputs(raw: torch.Tensor,
                 raw_noise_std: float = 0.0, 
                 white_bkgd: bool = False
                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    
+    #print(z_vals.shape)
+    #print(z_vals[0])
+    #print(rays_d.shape)
     
     # Difference between consecutive elements of 'z_vals'. [n_rays, n_samples]
     dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -326,7 +338,8 @@ def nerf_forward(rays_o: torch.Tensor,
                  kwargs_sample_hierarchical: dict = None,
                  fine_model = None,
                  viewdirs_encoding_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-                 chunksize=2**15
+                 chunksize=2**15,
+                 show=False
                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
 
     # Set no kwargs if none are given.
@@ -343,15 +356,24 @@ def nerf_forward(rays_o: torch.Tensor,
     if viewdirs_encoding_fn is not None:
         batches_viewdirs = prepare_viewdirs_chunks(query_points, rays_d, viewdirs_encoding_fn, chunksize=chunksize)
     else:
-        batchs_viewdirs = [None] * len(batches)
+        batches_viewdirs = [None] * len(batches)
 
     # Coarse model pass.
     # Split the encoded points into 'chunks', run the model on all chunks, and concatenate the results (to avoid out-of-memory issues).
     predictions = []
     for batch, batch_viewdirs in zip(batches, batches_viewdirs):
-        predictions.append(coarse_model(batch, viewdirs=batch_viewdirs))
+        predictions.append(coarse_model(batch, viewdirs=batch_viewdirs, show=show))
     raw = torch.cat(predictions, dim=0)
     raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
+
+    print("Query Points: " + str(query_points[0][0]))
+
+    temp = query_points.reshape(3, -1).detach().numpy()
+    fig = plt.figure(figsize=(100,100))
+    ax = plt.axes(projection="3d")
+    ax.scatter3D(temp[0], temp[1], temp[2], color='green')
+    plt.show()
+
 
     # Perform differentiable volume rendering to re-synthesize the RGB image.
     rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals, rays_d)
@@ -378,7 +400,7 @@ def nerf_forward(rays_o: torch.Tensor,
         fine_model = fine_model if fine_model is not None else coarse_model
         predictions = []
         for batch, batch_viewdirs in zip(batches, batches_viewdirs):
-            predictions.append(fine_model(batch, viewdirs=batch_viewdirs))
+            predictions.append(fine_model(batch, viewdirs=batch_viewdirs, show=show))
 
         raw = torch.cat(predictions)
         raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
@@ -569,7 +591,8 @@ def train(model: NeRF, encode: PositionalEncoder, fine_model: NeRF, encode_viewd
                                    kwargs_sample_hierarchical=kwargs_sample_hierarchical,
                                    fine_model=fine_model,
                                    viewdirs_encoding_fn=encode_viewdirs,
-                                   chunksize=chunksize)
+                                   chunksize=chunksize, 
+                                   show=True)
             
             rgb_predicted = outputs['rgb_map']
             loss = F.mse_loss(rgb_predicted, test_img.reshape(-1, 3))

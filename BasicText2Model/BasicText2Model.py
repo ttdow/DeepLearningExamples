@@ -105,7 +105,7 @@ img.save("output_s.jpg")
 
 # Images-to-Model
 # 2. Ray casting
-# 3. NN training
+# 3. NN prediction
 # 4. Voxel grid creation
 # 5. Surface mesh creation
 # 6. Output to <filetype>
