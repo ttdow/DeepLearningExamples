@@ -1,8 +1,56 @@
 import numpy as np
+import struct
+from array import array
+from os.path import join
+import random
+import matplotlib.pyplot as plt
 
+class MNISTDataLoader(object):
+    def __init__(self, train_image_path, train_label_path, test_image_path, test_label_path):
+        self.train_image_path = train_image_path
+        self.train_label_path = train_label_path
+        self.test_image_path = test_image_path
+        self.test_label_path = test_label_path
+
+    def read_image_labels(self, image_path, label_path):
+
+        labels = []
+
+        with open(label_path, 'rb') as file:
+            magic, size = struct.unpack(">II", file.read(8))
+            if magic != 2049:
+                raise ValueError
+            labels = array("B", file.read())
+
+        with open(image_path, 'rb') as file:
+            magic, size, rows, cols = struct.unpack(">IIII", file.read(16))
+            if magic != 2051:
+                raise ValueError
+            image_data = array("B", file.read())
+
+        images = []
+
+        for i in range(size):
+            images.append([0] * rows * cols)
+
+        for i in range(size):
+            img = np.array(image_data[i * rows * cols:(i + 1) * rows * cols])
+            img = img.reshape(28, 28)
+            images[i][:] = img
+
+        return images, labels
+
+    def load_data(self):
+        x_train, y_train = self.read_image_labels(self.train_image_path, self.train_label_path)
+        x_test, y_test = self.read_image_labels(self.test_image_path, self.test_label_path)
+
+        return (x_train, y_train), (x_test, y_test)
+
+
+# Parent class for the neural network layers.
 class Layer():
     def __init__(self):
-        self.paramas = {}
+        self.params = {}
 
     def forward(self, inputs):
         raise NotImplementedError
@@ -13,6 +61,7 @@ class Layer():
     def update_params(self, learning_rate):
         pass
 
+# A fully-connected neural network layer.
 class Linear(Layer):
     def __init__(self, input_size, output_size):
         super().__init__()
@@ -37,7 +86,6 @@ class Linear(Layer):
 class ReLU(Layer):
         def forward(self, inputs):
             self.inputs = inputs
-
             return np.maximum(0, inputs)
         
         def backward(self, grad):
@@ -98,10 +146,63 @@ class NeuralNetwork():
 
         return np.mean(prediction == labels)
     
+def show_images(images, title_texts):
+    cols = 5
+    rows = int(len(images)/cols) + 1
+    plt.figure(figsize=(30,20))
+    index = 1    
+    for x in zip(images, title_texts):        
+        image = x[0]        
+        title_text = x[1]
+        plt.subplot(rows, cols, index)        
+        plt.imshow(image, cmap=plt.cm.gray)
+        if (title_text != ''):
+            plt.title(title_text, fontsize = 15);        
+        index += 1
+
+    plt.show()
+
+input_path = './data/archive'
+training_images_filepath = join(input_path, 'train-images-idx3-ubyte/train-images-idx3-ubyte')
+training_labels_filepath = join(input_path, 'train-labels-idx1-ubyte/train-labels-idx1-ubyte')
+test_images_filepath = join(input_path, 't10k-images-idx3-ubyte/t10k-images-idx3-ubyte')
+test_labels_filepath = join(input_path, 't10k-labels-idx1-ubyte/t10k-labels-idx1-ubyte')
+
+mnist_dataloader = MNISTDataLoader(training_images_filepath, training_labels_filepath, test_images_filepath, test_labels_filepath)
+(x_train, y_train), (x_test, y_test) = mnist_dataloader.load_data()
+
+images_2_show = []
+titles_2_show = []
+for i in range(0, 10):
+    r = random.randint(1, 60000)
+    images_2_show.append(x_train[r])
+    titles_2_show.append('training image [' + str(r) + '] = ' + str(y_train[r]))    
+
+for i in range(0, 5):
+    r = random.randint(1, 10000)
+    images_2_show.append(x_test[r])        
+    titles_2_show.append('test image [' + str(r) + '] = ' + str(y_test[r]))    
+
+show_images(images_2_show, titles_2_show)
+
+# Instantiate neural network.
+# All this does is create a blank list of neural network layers.
 network = NeuralNetwork()
+
+# Add a linear layer to the neural network.
+# Create two np arrays:
+#   1. Size [input_size, output_size] representing NN weights.
+#   2. Size [output_size] representing NN biases.
 network.add(Linear(input_size=784, output_size=128))
+
+# Add a rectilinear activtion unit layer to the neural network.
 network.add(ReLU())
 network.add(Linear(input_size=128, output_size=128))
 network.add(ReLU())
 network.add(Linear(input_size=128, output_size=10))
+
+# Add a softmax activation layer to the neural network.
 network.add(Softmax())
+
+# Train the neural network.
+network.train(inputs, targets, learning_rate=0.001, num_epochs=100)
