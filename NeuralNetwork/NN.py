@@ -1,101 +1,107 @@
-import torch
-from torch import nn
-from torch.utils.data import DataLoader
-from torchvision import datasets
-from torchvision.transforms import ToTensor
+import numpy as np
 
-# Download training data from open datasets
-training_data = datasets.FashionMNIST(
-    root="data",
-    train=True,
-    download=True,
-    transform=ToTensor()
-)
-
-test_data = datasets.FashionMNIST(
-    root="data",
-    train=False,
-    download=True,
-    transform=ToTensor()
-)
-
-batch_size = 64
-
-# Create data loaders
-train_dataloader = DataLoader(training_data, batch_size=batch_size)
-test_dataloader = DataLoader(test_data, batch_size=batch_size)
-
-for x, y in test_dataloader:
-    print(f"Shape of x [N, C, H, W]: {x.shape}")
-    print(f"Shape of y: {y.shape} {y.dtype}")
-    break
-
-# Get cpu or gpu device for training
-device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-print(f"Using {device} device")
-
-# Define model
-class NeuralNetwork(nn.Module):
+class Layer():
     def __init__(self):
-        super().__init__()
-        self.flatten = nn.Flatten()
-        self.linear_relu_stack = nn.Sequential(
-            nn.Linear(28*28, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 10)
-        )
+        self.paramas = {}
+
+    def forward(self, inputs):
+        raise NotImplementedError
     
-    def forward(self, x):
-        x = self.flatten(x)
-        logits = self.linear_relu_stack(x)
-        return logits
+    def backward(self, grad):
+        raise NotImplementedError
+    
+    def update_params(self, learning_rate):
+        pass
 
-model = NeuralNetwork().to(device)
-print(model)
+class Linear(Layer):
+    def __init__(self, input_size, output_size):
+        super().__init__()
 
-loss_fn = nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+        self.params['weights'] = np.random.randn(input_size, output_size)
+        self.params['bias'] = np.random.randn(output_size)
 
-def train(dataloader, model, loss_fn, optimizer):
-    size = len(dataloader.dataset)
-    model.train()
-    for batch, (x, y) in enumerate(dataloader):
-        x, y = x.to(device), y.to(device)
+    def forward(self, inputs):
+        self.inputs = inputs
+        return np.dot(inputs, self.params['weights']) + self.params['bias']
+    
+    def backward(self, grad):
+        self.grad_weights = np.dot(self.inputs.T, grad)
+        self.grad_bias = np.sum(grad, axis=0)
 
-        # Compute prediction error
-        pred = model(x)
-        loss = loss_fn(pred, y)
+        return np.dot(grad, self.params['weights'].T)
+    
+    def update_params(self, learning_rate):
+        self.params['weights'] -= learning_rate * self.grad_weights
+        self.params['bias'] -= learning_rate * self.grad_bias
 
-        # Backpropagation
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+class ReLU(Layer):
+        def forward(self, inputs):
+            self.inputs = inputs
 
-        if batch % 100 == 0:
-            loss, current = loss.item(), batch * len(x)
-            print(f"loss: {loss:>7f} [{current:>5d}/{size:>5d}]")
+            return np.maximum(0, inputs)
+        
+        def backward(self, grad):
+            return grad * (self.inputs > 0)
+        
+class Softmax(Layer):
+    def forward(self, inputs):
+        exps = np.exp(inputs - np.max(inputs, axis=1, keepdims=True))
+        self.probs = exps / np.sum(exps, axis=1, keepdims=True)
 
-def test(dataloader, model, loss_fn):
-    size = len(dataloader.dataset)
-    num_batches = len(dataloader)
-    model.eval()
-    test_loss, correct = 0, 0
-    with torch.no_grad():
-        for x, y in dataloader:
-            x, y = x.to(device), y.to(device)
-            pred = model(x)
-            test_loss += loss_fn(pred, y).item()
-            correct += (pred.argmax(1) == y).type(torch.float).sum().item()
-    test_loss /= num_batches
-    correct /= size
-    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+        return self.probs
+    
+    def backward(self, grad):
+        return grad * self.probs * (1 - self.probs)
+    
+class NeuralNetwork():
+    def __init__(self):
+        self.layers = []
 
-epochs = 5
-for t in range(epochs):
-    print(f"Epoch {t+1}\n----------------------")
-    train(train_dataloader, model, loss_fn, optimizer)
-    test(test_dataloader, model, loss_fn)
+    def add(self, layer):
+        self.layers.append(layer)
 
-print("Done!")
+    def forward(self, inputs):
+        for layer in self.layers:
+            inputs = layer.forward(inputs)
+
+        return inputs
+    
+    def backward(self, grad):
+        for layer in reversed(self.layers):
+            grad = layer.backward(grad)
+
+    def update_params(self, learning_rate):
+        for layer in self.layers:
+            layer.update_params(learning_rate)
+
+    def train(self, inputs, targets, learning_rate, num_epochs):
+        for epoch in range(num_epochs):
+            outputs = self.forward(inputs)
+            loss = self.compute_loss(outputs, targets)
+            accuracy = self.compute_accuracy(outputs, targets)
+
+            self.backward(self.compute_grad(outputs, targets))
+            self.update_params(learning_rate)
+
+            if epoch % 100 == 0:
+                print(f"Epoch {epoch}: Loss: {loss:.4f}, Accuracy: {accuracy:.4f}")
+
+    def compute_loss(self, outputs, targets):
+        return -np.mean(targets * np.log(outputs + 1e-10))
+
+    def compute_grad(self, outputs, targets):
+        return (outputs - targets) / outputs.shape[0]
+
+    def compute_accuracy(self, outputs, targets):
+        prediction = np.argmax(outputs, axis=1)
+        labels = np.argmax(outputs, axis=1)
+
+        return np.mean(prediction == labels)
+    
+network = NeuralNetwork()
+network.add(Linear(input_size=784, output_size=128))
+network.add(ReLU())
+network.add(Linear(input_size=128, output_size=128))
+network.add(ReLU())
+network.add(Linear(input_size=128, output_size=10))
+network.add(Softmax())
