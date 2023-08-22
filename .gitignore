@@ -3,3 +3,10 @@
 /NeRF/novel_views
 /NeRF/tiny_nerf_data.npz
 /BasicText2Model/checkpoint.pt
+
+/PyTorch C++ Examples/ClassifierPyTorch/.vs/
+/PyTorch C++ Examples/ClassifierPyTorch/bin/
+/PyTorch C++ Examples/ClassifierPyTorch/obj/
+/PyTorch C++ Examples/DataClassifier/.vs/
+/PyTorch C++ Examples/PyTorchTraining/.vs/
+/PyTorch C++ Examples/PyTorchTraining/data/
